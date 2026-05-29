@@ -1,0 +1,92 @@
+name: Sync to HuggingFace Space
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '.github/**'
+      - 'README.md'
+      - '*.md'
+      - '.gitignore'
+
+jobs:
+  sync-to-huggingface:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      
+      - name: Install huggingface_hub
+        run: |
+          pip install huggingface_hub
+      
+      - name: Configure Git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "GitHub Actions"
+      
+      - name: Clone HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          echo "Cloning HuggingFace Space..."
+          git clone https://$HF_TOKEN@huggingface.co/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }} hf_space_tmp
+          cd hf_space_tmp
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "GitHub Actions"
+      
+      - name: Sync Files to HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+          HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
+        run: |
+          echo "Starting file synchronization..."
+          
+          # Remove old files from HF space (except .git)
+          cd hf_space_tmp
+          find . -type f ! -path './.git/*' ! -name '.git' -delete
+          find . -type d ! -path './.git*' -empty -delete
+          
+          # Copy new files from repo to HF space tmp
+          cd ..
+          rsync -av --exclude='.git' \
+                        --exclude='.github/' \
+                        --exclude='__pycache__/' \
+                        --exclude='*.pyc' \
+                        --exclude='.env' \
+                        --exclude='*.log' \
+                        --exclude='hf_space_tmp/' \
+                        ./ hf_space_tmp/
+          
+          # Commit and push to HuggingFace
+          cd hf_space_tmp
+          git add -A
+          if git diff-index --quiet HEAD; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          
+          git commit -m "Auto-sync from GitHub: ${{ github.sha }}"
+          git push https://$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME HEAD:main || \
+          git push https://$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME HEAD:master || \
+          git push https://$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME HEAD:main --force
+          
+          echo "✅ Sync completed successfully!"
+          echo "🔗 View your Space at: https://huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME"
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf hf_space_tmp
+          echo "Cleanup completed."
