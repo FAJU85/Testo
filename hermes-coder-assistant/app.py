@@ -20,11 +20,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 GITHUB_API = "https://api.github.com"
 
 # Model configuration - moved to config for better maintainability
-MODEL_NAME = "NousResearch/Hermes-2-Pro-Llama-3-8B"
+MODEL_NAME = os.getenv("HF_MODEL_NAME", "NousResearch/Hermes-2-Pro-Llama-3-8B")
 MODEL_LOADED = False
 MODEL = None
 TOKENIZER = None
 MODEL_LOAD_PROGRESS = {"status": "not_started", "message": ""}
+
+# Inference configuration from environment variables
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "512"))
+TOP_P = float(os.getenv("TOP_P", "0.9"))
 
 def load_hermes_model():
     """Load Hermes model in background with progress tracking"""
@@ -513,9 +518,9 @@ class HermesCoderAssistant:
                 outputs = MODEL.generate(
                     input_ids,
                     attention_mask=attention_mask,
-                    max_new_tokens=512,
-                    temperature=0.7,
-                    top_p=0.9,
+                    max_new_tokens=MAX_TOKENS,
+                    temperature=TEMPERATURE,
+                    top_p=TOP_P,
                     do_sample=True,
                     pad_token_id=TOKENIZER.eos_token_id,
                 )
