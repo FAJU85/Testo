@@ -4,89 +4,122 @@ on:
   push:
     branches:
       - main
-      - master
-    paths-ignore:
-      - '.github/**'
-      - 'README.md'
-      - '*.md'
-      - '.gitignore'
+      - feature/hermes-coder-assistant
+  workflow_dispatch:
 
 jobs:
   sync-to-huggingface:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
-      - name: Set up Python
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-      
-      - name: Install huggingface_hub
-        run: |
-          pip install huggingface_hub
-      
-      - name: Configure Git
-        run: |
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "GitHub Actions"
-      
-      - name: Clone HuggingFace Space
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install huggingface_hub>=0.20.0
+
+      - name: Sync to HuggingFace Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME || 'FAJU85' }}
+          SPACE_NAME: ${{ secrets.HF_SPACE_NAME || 'hermes-coder-assistant' }}
+          SOURCE_DIR: ${{ github.workspace }}
         run: |
-          echo "Cloning HuggingFace Space..."
-          git clone https://$HF_TOKEN@huggingface.co/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }} hf_space_tmp
-          cd hf_space_tmp
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "GitHub Actions"
-      
-      - name: Sync Files to HuggingFace Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_USERNAME: ${{ secrets.HF_USERNAME }}
-          HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
-        run: |
-          echo "Starting file synchronization..."
-          
-          # Remove old files from HF space (except .git)
-          cd hf_space_tmp
-          find . -type f ! -path './.git/*' ! -name '.git' -delete
-          find . -type d ! -path './.git*' -empty -delete
-          
-          # Copy new files from repo to HF space tmp
-          cd ..
-          rsync -av --exclude='.git' \
-                        --exclude='.github/' \
-                        --exclude='__pycache__/' \
-                        --exclude='*.pyc' \
-                        --exclude='.env' \
-                        --exclude='*.log' \
-                        --exclude='hf_space_tmp/' \
-                        ./ hf_space_tmp/
-          
-          # Commit and push to HuggingFace
-          cd hf_space_tmp
-          git add -A
-          if git diff-index --quiet HEAD; then
-            echo "No changes to commit."
-            exit 0
-          fi
-          
-          git commit -m "Auto-sync from GitHub: ${{ github.sha }}"
-          git push https://$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME HEAD:main || \
-          git push https://$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME HEAD:master || \
-          git push https://$HF_TOKEN@huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME HEAD:main --force
-          
-          echo "✅ Sync completed successfully!"
-          echo "🔗 View your Space at: https://huggingface.co/spaces/$HF_USERNAME/$HF_SPACE_NAME"
-      
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -rf hf_space_tmp
-          echo "Cleanup completed."
+          python << 'PYEOF'
+import os
+import sys
+from pathlib import Path
+from huggingface_hub import HfApi, login
+
+# Configuration
+HF_TOKEN = os.environ.get("HF_TOKEN")
+HF_USERNAME = os.environ.get("HF_USERNAME", "FAJU85")
+SPACE_NAME = os.environ.get("SPACE_NAME", "hermes-coder-assistant")
+SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", "."))
+
+# Files and directories to exclude from sync
+EXCLUDE_PATTERNS = {
+    '.git', '.github', '__pycache__', '*.pyc', '*.pyo', '*.pyd',
+    '.env', '.venv', 'venv', 'env', '.vscode', '.idea', 
+    '*.log', 'logs', '.DS_Store', 'Thumbs.db', 'model_cache',
+    '*.bin', '*.safetensors', '*.tmp', 'temp', 'build', 'dist',
+    '*.egg-info', '.eggs', 'eggs', 'parts', 'wheels'
+}
+
+def should_exclude(path_str):
+    """Check if a path should be excluded from sync."""
+    path_parts = Path(path_str).parts
+    for part in path_parts:
+        if part in EXCLUDE_PATTERNS or part.startswith('.'):
+            return True
+    for pattern in EXCLUDE_PATTERNS:
+        if '*' in pattern:
+            import fnmatch
+            if fnmatch.fnmatch(path_str, pattern) or fnmatch.fnmatch(Path(path_str).name, pattern):
+                return True
+    return False
+
+def get_files_to_sync(root_dir):
+    """Get all files that should be synced, excluding patterns."""
+    files = []
+    for p in root_dir.rglob("*"):
+        if p.is_file():
+            rel_path = str(p.relative_to(root_dir))
+            if not should_exclude(rel_path):
+                files.append((rel_path, p))
+    return files
+
+try:
+    # Login to Hugging Face
+    login(token=HF_TOKEN)
+    
+    # Initialize API
+    api = HfApi()
+    repo_id = f"{HF_USERNAME}/{SPACE_NAME}"
+    
+    print(f"🔄 Starting sync to HuggingFace Space: {repo_id}")
+    print(f"📁 Source directory: {SOURCE_DIR}")
+    
+    # Get files to sync
+    files_to_sync = get_files_to_sync(SOURCE_DIR)
+    print(f"📄 Found {len(files_to_sync)} files to sync\n")
+    
+    # Upload files
+    uploaded_count = 0
+    failed_count = 0
+    
+    for rel_path, full_path in files_to_sync:
+        try:
+            print(f"  Uploading: {rel_path}")
+            api.upload_file(
+                path_or_fileobj=str(full_path),
+                path_in_repo=rel_path,
+                repo_id=repo_id,
+                repo_type="space",
+                commit_message=f"Sync: {rel_path}"
+            )
+            uploaded_count += 1
+        except Exception as e:
+            print(f"  ❌ Failed: {rel_path} - {str(e)}")
+            failed_count += 1
+    
+    # Create a final commit summarizing the sync
+    if uploaded_count > 0:
+        print(f"\n✅ Successfully synced {uploaded_count} files")
+        if failed_count > 0:
+            print(f"⚠️  Failed to sync {failed_count} files")
+    else:
+        print("\n⚠️  No files were synced")
+    
+    print(f"\n🌐 View your Space: https://huggingface.co/spaces/{repo_id}")
+    
+except Exception as e:
+    print(f"\n❌ Critical error during sync: {str(e)}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
