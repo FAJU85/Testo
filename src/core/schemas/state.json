@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UserSessionContext",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Semantic version of this schema. Must be incremented on any structural change.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "userId": { "type": "string" },
+    "activeTrack": { "type": "string" },
+    "securityTier": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "stateManifest": {
+      "type": "object",
+      "properties": {
+        "lastCommitHash": { "type": "string" },
+        "pendingSync": { "type": "boolean" }
+      },
+      "required": ["lastCommitHash", "pendingSync"]
+    }
+  },
+  "required": ["schemaVersion", "userId", "activeTrack", "securityTier", "stateManifest"]
+}
