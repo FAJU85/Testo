@@ -1,6 +1,6 @@
 ---
 title: Hermes Coder Assistant
-emoji: 🤖
+emoji: ":robot:"
 colorFrom: purple
 colorTo: blue
 sdk: gradio
@@ -9,80 +9,110 @@ app_file: app.py
 pinned: false
 ---
 
-# 🤖 Hermes Coder Assistant
+# Hermes Coder Assistant
 
-An AI-powered coding assistant that connects to **Hermes-2-Pro-Llama-3-8B** and your **GitHub repositories**.
+An AI-powered coding assistant that connects **Hermes-2-Pro-Llama-3-8B** to your **GitHub repositories**. Browse, edit, and understand any codebase with AI assistance.
 
 ## Features
 
-- 🔗 **GitHub Integration**: Connect to any public or private GitHub repository
-- 📁 **File Browser**: Navigate and explore codebases with an intuitive interface
-- ✏️ **Code Editor**: View and edit files directly with syntax highlighting
-- 💬 **AI Chat**: Ask Hermes questions about your codebase
-- 🚀 **Direct Commits**: Save changes directly to GitHub
-- 🤖 **Local AI**: Uses Hermes-2-Pro for code understanding (runs locally!)
+### GitHub Integration
+- Connect to any public or private GitHub repository
+- Browse files and folders with live navigation
+- **Branch switching** - view and work on any branch
+- **Search** - find files and code in your repository
+- **Commits history** - view recent commits
+- **Create branches** - easily create feature branches
+- **Direct editing** - read, edit, and save files to GitHub
 
-## How to Use
+### AI-Powered
+- Uses Hermes-2-Pro for intelligent code assistance
+- Context-aware responses about your codebase
+- Code analysis and explanations
+- Runs locally on Hugging Face Spaces (free tier compatible!)
 
-### 1. Connect GitHub
+### File Editor
+- Syntax highlighting for 50+ languages
+- Read files from any GitHub repo
+- Edit and save with automatic commits
+- Delete files with confirmation
 
-Get a GitHub token from [github.com/settings/tokens](https://github.com/settings/tokens) with these scopes:
-- `repo` - for private repositories
+### Chat Interface
+- Ask questions about your codebase
+- Get code explanations and suggestions
+- Multi-turn conversation support
+- Model-aware context from your files
+
+## Quick Start
+
+### 1. Get a GitHub Token
+Create one at github.com/settings/tokens with:
+- `repo` - for private repository access
 - `read:user` - for basic user info
 
-Paste your token and click "Connect to GitHub"
+### 2. Connect & Start Coding
+1. Enter your GitHub token and click "Connect"
+2. Select any repository from the dropdown
+3. Browse files by clicking on them
+4. Click "Read" to load file content
+5. Edit in the code editor
+6. Click "Save Changes" to commit to GitHub
 
-### 2. Select a Repository
-
-Choose any repository from your GitHub account using the dropdown menu.
-
-### 3. Browse and Edit
-
-- Navigate through folders by clicking on them
-- Click on files to view their contents
-- Edit code in the editor
-- Click "Save Changes" to commit to GitHub
-
-### 4. Chat with Hermes
-
-Ask questions about your codebase:
-- "What does this file do?"
-- "Explain the project structure"
-- "Help me fix this bug"
-- "Write a test for this function"
+### 3. Chat with Hermes
+- Ask: "What does this file do?"
+- Ask: "Help me fix this bug"
+- Ask: "Explain the project structure"
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Hugging Face Space                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ┌─────────────┐     ┌──────────────┐     ┌───────────┐  │
-│   │   Gradio   │────▶│ Hermes Model │◀────│  GitHub  │  │
-│   │     UI     │     │  (Local)     │     │    API   │  │
-│   └─────────────┘     └──────────────┘     └───────────┘  │
-│         │                    │                     │        │
-│         └────────────────────┴─────────────────────┘        │
-│                         │                                   │
-│                    Your Browser                             │
-└─────────────────────────────────────────────────────────────┘
++-----------------+
+| Hugging Face    |
+| Space           |
++----+------+-----+
+|         |       |
+|  Gradio | Hermes| GitHub
+|   UI    | Model | API
+|         |       |
++---------+-------+
 ```
 
-## Requirements
+## System Requirements
 
-- **Model**: NousResearch/Hermes-2-Pro-Llama-3-8B (downloaded on first run)
-- **GPU**: Recommended for faster inference (will run on CPU but slower)
-- **RAM**: 16GB+ recommended for the full model
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| RAM | 8GB | 16GB+ |
+| GPU | None (CPU works) | GPU for faster inference |
+| Storage | 2GB | 20GB for model cache |
 
-## Local Development
+## Deployment
 
+### Option 1: Hugging Face Spaces (Recommended)
+1. Create a new Space at huggingface.co/new-space
+2. Select "Import from GitHub"
+3. Import this repository
+4. Done! Your app will be live
+
+### Option 2: Local Development
 ```bash
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
+cd hermes-coder-assistant
 pip install -r requirements.txt
 python app.py
 ```
+Open http://localhost:7860 in your browser.
 
-Then open http://localhost:7860 in your browser.
+### Option 3: Docker
+```bash
+docker build -t hermes-coder .
+docker run -p 7860:7860 hermes-coder
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | Your GitHub personal access token |
+| `HF_TOKEN` | Hugging Face token for model downloads |
 
 ## License
 
@@ -90,5 +120,6 @@ MIT License - See NousResearch/Hermes-Function-Calling for model licensing.
 
 ## Credits
 
-- Model: [NousResearch/Hermes-2-Pro-Llama-3-8B](https://huggingface.co/NousResearch/Hermes-2-Pro-Llama-3-8B)
-- Built with [Gradio](https://gradio.app/)
+- AI Model: NousResearch/Hermes-2-Pro-Llama-3-8B
+- Built with Gradio
+- Inspired by OpenHands
