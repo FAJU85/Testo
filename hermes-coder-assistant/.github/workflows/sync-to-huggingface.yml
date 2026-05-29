@@ -1,0 +1,87 @@
+name: Sync to HuggingFace Space
+
+on:
+  push:
+    branches:
+      - main
+      - feature/hermes-coder-assistant
+    paths:
+      - 'hermes-coder-assistant/**'
+  workflow_dispatch:
+
+jobs:
+  sync-to-huggingface:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install huggingface_hub requests
+
+      - name: Sync to HuggingFace
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python << 'PYEOF'
+import os
+import requests
+import base64
+from pathlib import Path
+
+SPACE_NAME = "hermes-coder-assistant"
+USERNAME = "FAJU85"
+HF_TOKEN = os.environ["HF_TOKEN"]
+SOURCE_DIR = Path("hermes-coder-assistant")
+API_BASE = "https://huggingface.co/api"
+
+def get_files(path):
+    files = []
+    for p in path.rglob("*"):
+        if p.is_file() and ".git" not in str(p):
+            files.append((str(p.relative_to(path)), p))
+    return files
+
+def upload_blob(path, content, repo_id):
+    url = f"{API_BASE}/{repo_id}/upload/{path}"
+    response = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {HF_TOKEN}"},
+        json={"blob": base64.b64encode(content).decode(), "zstd-compressed": False}
+    )
+    return response.status_code in [200, 201]
+
+def commit_changes(repo_id, message):
+    url = f"{API_BASE}/{repo_id}/commit/main"
+    response = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {HF_TOKEN}"},
+        json={"title": message, "description": message, "operation": "upsert"}
+    )
+    return response.status_code in [200, 201]
+
+print(f"Syncing {SOURCE_DIR} to {USERNAME}/{SPACE_NAME}...")
+
+uploaded = 0
+for rel_path, full_path in get_files(SOURCE_DIR):
+    try:
+        content = full_path.read_bytes()
+        if upload_blob(rel_path, content, f"{USERNAME}/{SPACE_NAME}"):
+            print(f"  Uploaded: {rel_path}")
+            uploaded += 1
+    except Exception as e:
+        print(f"  Failed: {rel_path} - {e}")
+
+if uploaded > 0:
+    commit_changes(f"{USERNAME}/{SPACE_NAME}", f"GitHub sync from {os.environ.get('GITHUB_SHA', 'x')[:7]}")
+
+print(f"\nDone! {uploaded} files synced.")
+print(f"View: https://huggingface.co/spaces/{USERNAME}/{SPACE_NAME}")
+PYEOF
