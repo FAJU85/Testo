@@ -69,11 +69,25 @@ class GitHubClient:
             "Accept": "application/vnd.github.v3+json"
         } if self.token else {}
     
+    def get_user_info(self) -> Dict:
+        """Get authenticated user info"""
+        url = f"{GITHUB_API}/user"
+        resp = requests.get(url, headers=self.headers)
+        resp.raise_for_status()
+        return resp.json()
+    
     def get_repos(self, page: int = 1, per_page: int = 30) -> List[Dict]:
         """Get user's repositories"""
         url = f"{GITHUB_API}/user/repos"
         params = {"page": page, "per_page": per_page, "sort": "updated"}
         resp = requests.get(url, headers=self.headers, params=params)
+        resp.raise_for_status()
+        return resp.json()
+    
+    def get_repo(self, owner: str, repo: str) -> Dict:
+        """Get repository details"""
+        url = f"{GITHUB_API}/repos/{owner}/{repo}"
+        resp = requests.get(url, headers=self.headers)
         resp.raise_for_status()
         return resp.json()
     
@@ -97,6 +111,7 @@ class GitHubClient:
     def update_file(self, owner: str, repo: str, path: str, content: str, 
                     message: str, sha: str) -> Dict:
         """Update a file in the repository"""
+        import base64
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
         data = {
             "message": message,
@@ -110,6 +125,7 @@ class GitHubClient:
     def create_file(self, owner: str, repo: str, path: str, content: str, 
                     message: str) -> Dict:
         """Create a new file in the repository"""
+        import base64
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
         data = {
             "message": message,
@@ -134,6 +150,20 @@ class GitHubClient:
         resp = requests.get(url, headers=self.headers)
         resp.raise_for_status()
         return resp.json()
+    
+    def get_commits(self, owner: str, repo: str, per_page: int = 10) -> List[Dict]:
+        """Get repository commits"""
+        url = f"{GITHUB_API}/repos/{owner}/{repo}/commits"
+        resp = requests.get(url, headers=self.headers, params={"per_page": per_page})
+        resp.raise_for_status()
+        return resp.json()
+    
+    def get_file_history(self, owner: str, repo: str, path: str) -> List[Dict]:
+        """Get commit history for a specific file"""
+        url = f"{GITHUB_API}/repos/{owner}/{repo}/commits"
+        resp = requests.get(url, headers=self.headers, params={"path": path})
+        resp.raise_for_status()
+        return resp.json()
 
 
 class HermesCoderAssistant:
@@ -142,23 +172,20 @@ class HermesCoderAssistant:
     def __init__(self):
         self.github = None
         self.current_repo = None
+        self.current_repo_info = {}
         self.current_path = ""
+        self.current_branch = "main"
         self.file_contents = {}  # Cache for edited files
         self.conversation_history = []
+        self.search_results = []
     
     def set_github_token(self, token: str) -> str:
         """Set GitHub token and verify"""
         self.github = GitHubClient(token)
         try:
-            # Verify token by getting user info
-            resp = requests.get(f"{GITHUB_API}/user", headers=self.github.headers)
-            if resp.status_code == 200:
-                user = resp.json()
-                self.conversation_history = []
-                return f"✅ Connected as: {user.get('login', 'Unknown')}"
-            else:
-                self.github = None
-                return "❌ Invalid token or insufficient permissions"
+            user = self.github.get_user_info()
+            self.conversation_history = []
+            return f"✅ Connected as: {user.get('login', 'Unknown')}"
         except Exception as e:
             self.github = None
             return f"❌ Connection failed: {str(e)}"
@@ -181,11 +208,137 @@ class HermesCoderAssistant:
             self.current_repo = repo_full_name
             self.current_path = ""
             self.file_contents = {}
+            self.search_results = []
             owner, repo = repo_full_name.split("/")
+            
+            # Get repo info including default branch
+            self.current_repo_info = self.github.get_repo(owner, repo)
+            self.current_branch = self.current_repo_info.get("default_branch", "main")
+            
             contents = self.github.get_repo_contents(owner, repo)
             return self._format_directory_list(contents, "")
         except Exception as e:
             return f"Error: {str(e)}"
+    
+    def get_repo_info(self) -> str:
+        """Get current repository info"""
+        if not self.current_repo_info:
+            return "No repository selected"
+        try:
+            info = self.current_repo_info
+            desc = info.get("description", "No description")
+            stars = info.get("stargazers_count", 0)
+            forks = info.get("forks_count", 0)
+            Lang = info.get("language", "Unknown")
+            return f"📊 **{self.current_repo}**\n\n{desc or 'No description'}\n\n⭐ {stars} | 🍴 {forks} | 📝 {Lang}"
+        except Exception:
+            return "Error getting repo info"
+    
+    def get_branches_list(self) -> List[str]:
+        """Get list of branches"""
+        if not self.github or not self.current_repo:
+            return ["No repository selected"]
+        try:
+            owner, repo = self.current_repo.split("/")
+            branches = self.github.get_branches(owner, repo)
+            return [b["name"] for b in branches]
+        except Exception as e:
+            return [f"Error: {str(e)}"]
+    
+    def switch_branch(self, branch: str) -> str:
+        """Switch to a different branch"""
+        if not self.github or not self.current_repo:
+            return "No repository selected"
+        try:
+            self.current_branch = branch
+            self.current_path = ""
+            self.file_contents = {}
+            owner, repo = self.current_repo.split("/")
+            contents = self.github.get_repo_contents(owner, repo, headers={"ref": branch})
+            return self._format_directory_list(contents, "")
+        except Exception as e:
+            return f"Error switching branch: {str(e)}"
+    
+    def search_in_repo(self, query: str, search_type: str = "code") -> str:
+        """Search for files or code in the repository"""
+        if not self.github or not self.current_repo:
+            return "No repository selected"
+        if not query.strip():
+            return "Please enter a search query"
+        
+        try:
+            owner, repo = self.current_repo.split("/")
+            # Use GitHub search API
+            url = f"{GITHUB_API}/search/code"
+            params = {
+                "q": f"{query} repo:{owner}/{repo}",
+                "per_page": 20
+            }
+            resp = requests.get(url, headers=self.github.headers, params=params)
+            resp.raise_for_status()
+            results = resp.json()
+            
+            items = results.get("items", [])
+            if not items:
+                return f"No results found for: {query}"
+            
+            self.search_results = items
+            lines = [f"🔍 Found {len(items)} results for '{query}':\n"]
+            for item in items[:15]:
+                lines.append(f"📄 {item['path']}")
+            
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Search error: {str(e)}"
+    
+    def get_commits_list(self, limit: int = 10) -> str:
+        """Get recent commits for current repo"""
+        if not self.github or not self.current_repo:
+            return "No repository selected"
+        try:
+            owner, repo = self.current_repo.split("/")
+            commits = self.github.get_commits(owner, repo, per_page=limit)
+            lines = [f"📜 Recent commits in {self.current_repo}:\n"]
+            for commit in commits:
+                msg = commit.get("commit", {}).get("message", "").split("\n")[0]
+                author = commit.get("commit", {}).get("author", {}).get("name", "Unknown")
+                date = commit.get("commit", {}).get("author", {}).get("date", "")[:10]
+                sha = commit.get("sha", "")[:7]
+                lines.append(f"• `{sha}` {msg} - {author} ({date})")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error fetching commits: {str(e)}"
+    
+    def create_branch(self, branch_name: str, from_branch: str = None) -> str:
+        """Create a new branch"""
+        if not self.github or not self.current_repo:
+            return "No repository selected"
+        if not branch_name.strip():
+            return "Please enter a branch name"
+        
+        try:
+            owner, repo = self.current_repo.split("/")
+            base_branch = from_branch or self.current_branch
+            
+            # Get the SHA of the base branch's latest commit
+            url = f"{GITHUB_API}/repos/{owner}/{repo}/git/ref/heads/{base_branch}"
+            resp = requests.get(url, headers=self.github.headers)
+            resp.raise_for_status()
+            base_sha = resp.json()["object"]["sha"]
+            
+            # Create new branch
+            url = f"{GITHUB_API}/repos/{owner}/{repo}/git/refs"
+            data = {
+                "ref": f"refs/heads/{branch_name}",
+                "sha": base_sha
+            }
+            resp = requests.post(url, headers=self.github.headers, json=data)
+            resp.raise_for_status()
+            
+            self.current_branch = branch_name
+            return f"✅ Created branch '{branch_name}' from '{base_branch}'"
+        except Exception as e:
+            return f"Error creating branch: {str(e)}"
     
     def navigate_to_path(self, path: str) -> str:
         """Navigate to a specific path in the repository"""
@@ -567,13 +720,32 @@ def create_ui():
                 
                 repo_display = gr.Textbox(
                     label="Files & Folders",
-                    lines=15,
+                    lines=12,
                     interactive=False
                 )
                 
                 repo_dropdown.change(
                     fn=app.select_repository,
                     inputs=[repo_dropdown],
+                    outputs=[repo_display]
+                )
+                
+                with gr.Row():
+                    branch_dropdown = gr.Dropdown(
+                        label="Branch",
+                        choices=["main"],
+                        scale=2
+                    )
+                    branch_btn = gr.Button("🔀", scale=1, info="Switch branch")
+                
+                branch_btn.click(
+                    fn=app.get_branches_list,
+                    outputs=[branch_dropdown]
+                )
+                
+                branch_dropdown.change(
+                    fn=app.switch_branch,
+                    inputs=[branch_dropdown],
                     outputs=[repo_display]
                 )
                 
@@ -589,6 +761,45 @@ def create_ui():
                     inputs=[path_input],
                     outputs=[repo_display]
                 )
+                
+                gr.Markdown("### 🔍 Search & Utils")
+                
+                with gr.Accordion("Search", open=False):
+                    search_input = gr.Textbox(
+                        label="Search in Repository",
+                        placeholder="Enter search term..."
+                    )
+                    search_btn = gr.Button("🔍 Search")
+                    search_results = gr.Textbox(label="Results", lines=8, interactive=False)
+                    
+                    search_btn.click(
+                        fn=app.search_in_repo,
+                        inputs=[search_input],
+                        outputs=[search_results]
+                    )
+                
+                with gr.Accordion("📜 Commits", open=False):
+                    commits_display = gr.Textbox(label="Recent Commits", lines=10, interactive=False)
+                    commits_btn = gr.Button("📜 Load Commits")
+                    
+                    commits_btn.click(
+                        fn=app.get_commits_list,
+                        outputs=[commits_display]
+                    )
+                
+                with gr.Accordion("🌿 Create Branch", open=False):
+                    new_branch_input = gr.Textbox(
+                        label="New Branch Name",
+                        placeholder="feature/my-feature"
+                    )
+                    create_branch_btn = gr.Button("🌿 Create Branch")
+                    branch_status = gr.Textbox(label="Status", interactive=False)
+                    
+                    create_branch_btn.click(
+                        fn=app.create_branch,
+                        inputs=[new_branch_input],
+                        outputs=[branch_status]
+                    )
             
             with gr.Column(scale=2):
                 gr.Markdown("### 📝 File Editor")
