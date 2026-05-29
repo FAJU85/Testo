@@ -1,0 +1,34 @@
+# Hermes Docker Helper
+# Run inference with Docker
+
+.PHONY: build run clean
+
+IMAGE_NAME := hermes-function-calling
+PORT := 7860
+
+build:
+	docker build -t $(IMAGE_NAME) .
+
+dev:
+	docker run --rm -it \
+		-p $(PORT):7860 \
+		-v $(HOME)/.cache/huggingface:/root/.cache/huggingface \
+		--shm-size=2g \
+		$(IMAGE_NAME)
+
+run:
+	docker run --rm -d \
+		-p $(PORT):7860 \
+		-v $(HOME)/.cache/huggingface:/root/.cache/huggingface \
+		--shm-size=2g \
+		--name hermes-app \
+		$(IMAGE_NAME)
+
+stop:
+	docker stop hermes-app || true
+
+clean:
+	docker rmi $(IMAGE_NAME) || true
+
+logs:
+	docker logs -f hermes-app
