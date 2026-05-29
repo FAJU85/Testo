@@ -19,25 +19,39 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 # GitHub API helpers
 GITHUB_API = "https://api.github.com"
 
-# Model configuration
-MODEL_NAME = "NousResearch/Hermes-2-Pro-Llama-3-8B"
+# Model configuration - moved to config for better maintainability
+MODEL_NAME = os.getenv("HF_MODEL_NAME", "NousResearch/Hermes-2-Pro-Llama-3-8B")
 MODEL_LOADED = False
 MODEL = None
 TOKENIZER = None
+MODEL_LOAD_PROGRESS = {"status": "not_started", "message": ""}
+
+# Inference configuration from environment variables
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "512"))
+TOP_P = float(os.getenv("TOP_P", "0.9"))
 
 def load_hermes_model():
-    """Load Hermes model in background"""
-    global MODEL, TOKENIZER, MODEL_LOADED
+    """Load Hermes model in background with progress tracking"""
+    global MODEL, TOKENIZER, MODEL_LOADED, MODEL_LOAD_PROGRESS
+    
     if MODEL_LOADED:
         return True
     
     try:
+        MODEL_LOAD_PROGRESS["status"] = "loading"
+        MODEL_LOAD_PROGRESS["message"] = "Initializing quantization config..."
         print("Loading Hermes model...")
+        
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
         )
+        
+        MODEL_LOAD_PROGRESS["status"] = "downloading"
+        MODEL_LOAD_PROGRESS["message"] = "Downloading model weights (this may take a few minutes on first run)..."
+        print("Downloading model...")
         
         MODEL = AutoModelForCausalLM.from_pretrained(
             MODEL_NAME,
@@ -53,9 +67,13 @@ def load_hermes_model():
         TOKENIZER.padding_side = "left"
         
         MODEL_LOADED = True
+        MODEL_LOAD_PROGRESS["status"] = "ready"
+        MODEL_LOAD_PROGRESS["message"] = "Model loaded successfully!"
         print("Hermes model loaded!")
         return True
     except Exception as e:
+        MODEL_LOAD_PROGRESS["status"] = "error"
+        MODEL_LOAD_PROGRESS["message"] = f"Error loading model: {str(e)}"
         print(f"Error loading model: {e}")
         return False
 
@@ -180,15 +198,25 @@ class HermesCoderAssistant:
         self.search_results = []
     
     def set_github_token(self, token: str) -> str:
-        """Set GitHub token and verify"""
+        """Set GitHub token and verify with retry logic"""
         self.github = GitHubClient(token)
-        try:
-            user = self.github.get_user_info()
-            self.conversation_history = []
-            return f"✅ Connected as: {user.get('login', 'Unknown')}"
-        except Exception as e:
-            self.github = None
-            return f"❌ Connection failed: {str(e)}"
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                user = self.github.get_user_info()
+                self.conversation_history = []
+                return f"✅ Connected as: {user.get('login', 'Unknown')}"
+            except requests.exceptions.RateLimitError:
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                self.github = None
+                return f"❌ Rate limit exceeded. Please wait and try again."
+            except Exception as e:
+                self.github = None
+                return f"❌ Connection failed: {str(e)}"
+        return "❌ Connection failed after multiple attempts"
     
     def get_repositories(self) -> List[str]:
         """Get list of user's repositories"""
@@ -490,9 +518,9 @@ class HermesCoderAssistant:
                 outputs = MODEL.generate(
                     input_ids,
                     attention_mask=attention_mask,
-                    max_new_tokens=512,
-                    temperature=0.7,
-                    top_p=0.9,
+                    max_new_tokens=MAX_TOKENS,
+                    temperature=TEMPERATURE,
+                    top_p=TOP_P,
                     do_sample=True,
                     pad_token_id=TOKENIZER.eos_token_id,
                 )

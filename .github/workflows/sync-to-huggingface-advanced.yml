@@ -1,0 +1,239 @@
+name: Sync to HuggingFace Space (Advanced)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    paths-ignore:
+      - '.github/**'
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync even if no changes detected'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  HF_SPACE_URL: "https://huggingface.co/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }}"
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_sync: ${{ steps.check.outputs.should_sync }}
+      change_count: ${{ steps.check.outputs.change_count }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check for changes
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.force_sync }}" == "true" ]; then
+            echo "should_sync=true" >> $GITHUB_OUTPUT
+            echo "change_count=forced" >> $GITHUB_OUTPUT
+            echo "🔵 Forced sync requested"
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -vE '^\.github/|\.md$|\.gitignore|LICENSE' | wc -l)
+            if [ "$CHANGED_FILES" -gt 0 ]; then
+              echo "should_sync=true" >> $GITHUB_OUTPUT
+              echo "change_count=$CHANGED_FILES" >> $GITHUB_OUTPUT
+              echo "📝 Detected $CHANGED_FILES changed file(s)"
+            else
+              echo "should_sync=false" >> $GITHUB_OUTPUT
+              echo "change_count=0" >> $GITHUB_OUTPUT
+              echo "✅ No relevant changes detected"
+            fi
+          fi
+
+  sync-to-huggingface:
+    needs: pre-check
+    if: needs.pre-check.outputs.should_sync == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Validate secrets exist
+        run: |
+          if [ -z "${{ secrets.HF_TOKEN }}" ]; then
+            echo "::error::HF_TOKEN secret is not set. Please add it in repository settings."
+            exit 1
+          fi
+          if [ -z "${{ secrets.HF_USERNAME }}" ]; then
+            echo "::error::HF_USERNAME secret is not set. Please add it in repository settings."
+            exit 1
+          fi
+          if [ -z "${{ secrets.HF_SPACE_NAME }}" ]; then
+            echo "::error::HF_SPACE_NAME secret is not set. Please add it in repository settings."
+            exit 1
+          fi
+          echo "✅ All required secrets are configured"
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          pip install huggingface_hub[cli]
+      
+      - name: Configure Git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "GitHub Actions"
+          git config --global credential.helper store
+      
+      - name: Clone HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          echo "🔄 Cloning HuggingFace Space..."
+          echo "Space URL: $HF_SPACE_URL"
+          
+          # Use huggingface-cli for better authentication handling
+          huggingface-cli login --token $HF_TOKEN
+          
+          git clone https://$HF_TOKEN@huggingface.co/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }} hf_space_tmp
+          
+          cd hf_space_tmp
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "GitHub Actions"
+          echo "✅ Space cloned successfully"
+      
+      - name: Sync Files to HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          echo "🚀 Starting file synchronization..."
+          echo "Changes to sync: ${{ needs.pre-check.outputs.change_count }} file(s)"
+          
+          # Remove old files from HF space (except .git)
+          cd hf_space_tmp
+          find . -type f ! -path './.git/*' ! -name '.git' -delete || true
+          find . -mindepth 1 -type d ! -path './.git*' -empty -delete || true
+          
+          # Copy new files from repo to HF space
+          cd ..
+          echo "📦 Copying files..."
+          rsync -av --delete \
+                    --exclude='.git/' \
+                    --exclude='.github/' \
+                    --exclude='__pycache__/' \
+                    --exclude='*.pyc' \
+                    --exclude='*.pyo' \
+                    --exclude='.env*' \
+                    --exclude='*.log' \
+                    --exclude='hf_space_tmp/' \
+                    --exclude='.pytest_cache/' \
+                    --exclude='.coverage' \
+                    --exclude='htmlcov/' \
+                    --exclude='venv/' \
+                    --exclude='env/' \
+                    --exclude='.venv/' \
+                    --exclude='node_modules/' \
+                    --exclude='dist/' \
+                    --exclude='build/' \
+                    ./ hf_space_tmp/
+          
+          # Show what will be synced
+          echo "📋 Files to be synced:"
+          cd hf_space_tmp
+          git status --short
+          
+          # Commit and push
+          git add -A
+          
+          if git diff-index --quiet HEAD; then
+            echo "ℹ️ No changes to commit after sync"
+            exit 0
+          fi
+          
+          COMMIT_MSG="Auto-sync from GitHub: ${GITHUB_SHA:0:7} - ${{ github.event.head_commit.message }}"
+          git commit -m "$COMMIT_MSG"
+          
+          echo "⬆️ Pushing to HuggingFace..."
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if git push https://$HF_TOKEN@huggingface.co/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }} HEAD:main; then
+              echo "✅ Successfully pushed to main branch"
+              break
+            elif git push https://$HF_TOKEN@huggingface.co/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }} HEAD:master; then
+              echo "✅ Successfully pushed to master branch"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️ Push failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+                sleep 5
+              else
+                echo "::error::Failed to push after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ SYNC COMPLETED SUCCESSFULLY!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔗 Space URL: $HF_SPACE_URL"
+          echo "📝 Commit: ${GITHUB_SHA:0:7}"
+          echo "⏱️ Time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      - name: Verify sync success
+        run: |
+          echo "🔍 Verifying sync..."
+          sleep 10  # Wait for HF to process
+          
+          # Try to fetch the space info
+          if curl -s -f "https://huggingface.co/api/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }}" > /dev/null; then
+            echo "✅ Space is accessible"
+          else
+            echo "⚠️ Warning: Could not verify space accessibility"
+          fi
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          rm -rf hf_space_tmp
+          echo "✅ Cleanup completed"
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Sync to HuggingFace failed! Check the logs above."
+          echo "Common issues:"
+          echo "  - Invalid or expired HF_TOKEN"
+          echo "  - Incorrect HF_USERNAME or HF_SPACE_NAME"
+          echo "  - Network connectivity issues"
+          echo "  - Space does not exist or you lack permissions"
+
+  skip-notify:
+    needs: pre-check
+    if: needs.pre-check.outputs.should_sync == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip sync notification
+        run: |
+          echo "⏭️ Skipping sync - no relevant changes detected"
+          echo "Files changed: ${{ needs.pre-check.outputs.change_count }}"

@@ -5,8 +5,6 @@ on:
     branches:
       - main
       - feature/hermes-coder-assistant
-    paths:
-      - 'hermes-coder-assistant/**'
   workflow_dispatch:
 
 jobs:
@@ -24,64 +22,104 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install huggingface_hub requests
+        run: pip install huggingface_hub>=0.20.0
 
-      - name: Sync to HuggingFace
+      - name: Sync to HuggingFace Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME || 'FAJU85' }}
+          SPACE_NAME: ${{ secrets.HF_SPACE_NAME || 'hermes-coder-assistant' }}
+          SOURCE_DIR: ${{ github.workspace }}
         run: |
           python << 'PYEOF'
 import os
-import requests
-import base64
+import sys
 from pathlib import Path
+from huggingface_hub import HfApi, login
 
-SPACE_NAME = "hermes-coder-assistant"
-USERNAME = "FAJU85"
-HF_TOKEN = os.environ["HF_TOKEN"]
-SOURCE_DIR = Path("hermes-coder-assistant")
-API_BASE = "https://huggingface.co/api"
+# Configuration
+HF_TOKEN = os.environ.get("HF_TOKEN")
+HF_USERNAME = os.environ.get("HF_USERNAME", "FAJU85")
+SPACE_NAME = os.environ.get("SPACE_NAME", "hermes-coder-assistant")
+SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", "."))
 
-def get_files(path):
+# Files and directories to exclude from sync
+EXCLUDE_PATTERNS = {
+    '.git', '.github', '__pycache__', '*.pyc', '*.pyo', '*.pyd',
+    '.env', '.venv', 'venv', 'env', '.vscode', '.idea', 
+    '*.log', 'logs', '.DS_Store', 'Thumbs.db', 'model_cache',
+    '*.bin', '*.safetensors', '*.tmp', 'temp', 'build', 'dist',
+    '*.egg-info', '.eggs', 'eggs', 'parts', 'wheels'
+}
+
+def should_exclude(path_str):
+    """Check if a path should be excluded from sync."""
+    path_parts = Path(path_str).parts
+    for part in path_parts:
+        if part in EXCLUDE_PATTERNS or part.startswith('.'):
+            return True
+    for pattern in EXCLUDE_PATTERNS:
+        if '*' in pattern:
+            import fnmatch
+            if fnmatch.fnmatch(path_str, pattern) or fnmatch.fnmatch(Path(path_str).name, pattern):
+                return True
+    return False
+
+def get_files_to_sync(root_dir):
+    """Get all files that should be synced, excluding patterns."""
     files = []
-    for p in path.rglob("*"):
-        if p.is_file() and ".git" not in str(p):
-            files.append((str(p.relative_to(path)), p))
+    for p in root_dir.rglob("*"):
+        if p.is_file():
+            rel_path = str(p.relative_to(root_dir))
+            if not should_exclude(rel_path):
+                files.append((rel_path, p))
     return files
 
-def upload_blob(path, content, repo_id):
-    url = f"{API_BASE}/{repo_id}/upload/{path}"
-    response = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {HF_TOKEN}"},
-        json={"blob": base64.b64encode(content).decode(), "zstd-compressed": False}
-    )
-    return response.status_code in [200, 201]
-
-def commit_changes(repo_id, message):
-    url = f"{API_BASE}/{repo_id}/commit/main"
-    response = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {HF_TOKEN}"},
-        json={"title": message, "description": message, "operation": "upsert"}
-    )
-    return response.status_code in [200, 201]
-
-print(f"Syncing {SOURCE_DIR} to {USERNAME}/{SPACE_NAME}...")
-
-uploaded = 0
-for rel_path, full_path in get_files(SOURCE_DIR):
-    try:
-        content = full_path.read_bytes()
-        if upload_blob(rel_path, content, f"{USERNAME}/{SPACE_NAME}"):
-            print(f"  Uploaded: {rel_path}")
-            uploaded += 1
-    except Exception as e:
-        print(f"  Failed: {rel_path} - {e}")
-
-if uploaded > 0:
-    commit_changes(f"{USERNAME}/{SPACE_NAME}", f"GitHub sync from {os.environ.get('GITHUB_SHA', 'x')[:7]}")
-
-print(f"\nDone! {uploaded} files synced.")
-print(f"View: https://huggingface.co/spaces/{USERNAME}/{SPACE_NAME}")
+try:
+    # Login to Hugging Face
+    login(token=HF_TOKEN)
+    
+    # Initialize API
+    api = HfApi()
+    repo_id = f"{HF_USERNAME}/{SPACE_NAME}"
+    
+    print(f"🔄 Starting sync to HuggingFace Space: {repo_id}")
+    print(f"📁 Source directory: {SOURCE_DIR}")
+    
+    # Get files to sync
+    files_to_sync = get_files_to_sync(SOURCE_DIR)
+    print(f"📄 Found {len(files_to_sync)} files to sync\n")
+    
+    # Upload files
+    uploaded_count = 0
+    failed_count = 0
+    
+    for rel_path, full_path in files_to_sync:
+        try:
+            print(f"  Uploading: {rel_path}")
+            api.upload_file(
+                path_or_fileobj=str(full_path),
+                path_in_repo=rel_path,
+                repo_id=repo_id,
+                repo_type="space",
+                commit_message=f"Sync: {rel_path}"
+            )
+            uploaded_count += 1
+        except Exception as e:
+            print(f"  ❌ Failed: {rel_path} - {str(e)}")
+            failed_count += 1
+    
+    # Create a final commit summarizing the sync
+    if uploaded_count > 0:
+        print(f"\n✅ Successfully synced {uploaded_count} files")
+        if failed_count > 0:
+            print(f"⚠️  Failed to sync {failed_count} files")
+    else:
+        print("\n⚠️  No files were synced")
+    
+    print(f"\n🌐 View your Space: https://huggingface.co/spaces/{repo_id}")
+    
+except Exception as e:
+    print(f"\n❌ Critical error during sync: {str(e)}", file=sys.stderr)
+    sys.exit(1)
 PYEOF
