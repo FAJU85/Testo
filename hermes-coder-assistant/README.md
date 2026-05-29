@@ -118,8 +118,34 @@ docker run -p 7860:7860 hermes-coder
 
 MIT License - See NousResearch/Hermes-Function-Calling for model licensing.
 
+## Auto-Sync to HuggingFace
+
+This repository features **automatic synchronization** to HuggingFace Spaces. Every time you push to GitHub, your changes are automatically deployed to your HuggingFace Space.
+
+### Setup Instructions
+
+1. **Configure GitHub Secrets** (one-time setup):
+   - Go to your repository → Settings → Secrets and variables → Actions
+   - Add these secrets:
+     - `HF_TOKEN`: Your HuggingFace access token (get it at https://huggingface.co/settings/tokens)
+     - `HF_USERNAME`: Your HuggingFace username (optional, defaults to `FAJU85`)
+     - `HF_SPACE_NAME`: Your Space name (optional, defaults to `hermes-coder-assistant`)
+
+2. **Create Your HuggingFace Space**:
+   - Go to https://huggingface.co/new-space
+   - Choose "Import from GitHub" or create empty
+   - Make sure the Space type is **Gradio**
+
+3. **Push to GitHub**:
+   - Any push to `main` or `feature/hermes-coder-assistant` branches triggers auto-sync
+   - View sync progress in the **Actions** tab
+   - Your Space updates automatically!
+
+📖 For detailed documentation, see [HUGGINGFACE_SYNC_GUIDE.md](./HUGGINGFACE_SYNC_GUIDE.md)
+
 ## Credits
 
 - AI Model: NousResearch/Hermes-2-Pro-Llama-3-8B
 - Built with Gradio
 - Inspired by OpenHands
+- Auto-sync powered by GitHub Actions
