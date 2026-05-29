@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OrchestratorToBuilderContract",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Version of this IAC schema. Must be validated by the receiving agent.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "taskId": { "type": "string" },
+    "approvedFileSet": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "mutationDirectives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "targetFile": { "type": "string" },
+          "action": { "type": "string", "enum": ["CREATE", "MODIFY", "DELETE"] },
+          "targetInterface": { "type": "string" },
+          "explicitLogic": { "type": "string" }
+        },
+        "required": ["targetFile", "action", "explicitLogic"]
+      }
+    },
+    "dependencyOverride": { "type": "boolean" },
+    "forbiddenActions": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["schemaVersion", "taskId", "approvedFileSet", "mutationDirectives", "dependencyOverride"]
+}
