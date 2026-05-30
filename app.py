@@ -86,44 +86,41 @@ class GitHubClient:
             "Authorization": f"token {self.token}",
             "Accept": "application/vnd.github.v3+json"
         } if self.token else {}
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Centralized request helper with error handling"""
+        kwargs.setdefault("headers", self.headers)
+        resp = requests.request(method, url, **kwargs)
+        resp.raise_for_status()
+        return resp
     
     def get_user_info(self) -> Dict:
         """Get authenticated user info"""
         url = f"{GITHUB_API}/user"
-        resp = requests.get(url, headers=self.headers)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", url).json()
     
     def get_repos(self, page: int = 1, per_page: int = 30) -> List[Dict]:
         """Get user's repositories"""
         url = f"{GITHUB_API}/user/repos"
         params = {"page": page, "per_page": per_page, "sort": "updated"}
-        resp = requests.get(url, headers=self.headers, params=params)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", url, params=params).json()
     
     def get_repo(self, owner: str, repo: str) -> Dict:
         """Get repository details"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}"
-        resp = requests.get(url, headers=self.headers)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", url).json()
     
     def get_repo_contents(self, owner: str, repo: str, path: str = "", ref: str = None) -> List[Dict]:
         """Get contents of a repository path"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
         params = {"ref": ref} if ref else {}
-        resp = requests.get(url, headers=self.headers, params=params)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", url, params=params).json()
     
     def get_file_content(self, owner: str, repo: str, path: str, ref: str = None) -> Tuple[str, str]:
         """Get file content and sha"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
         params = {"ref": ref} if ref else {}
-        resp = requests.get(url, headers=self.headers, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+        data = self._request("GET", url, params=params).json()
         import base64
         content = base64.b64decode(data["content"]).decode("utf-8")
         return content, data["sha"]
@@ -140,9 +137,7 @@ class GitHubClient:
         }
         if branch:
             data["branch"] = branch
-        resp = requests.put(url, headers=self.headers, json=data)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("PUT", url, json=data).json()
     
     def create_file(self, owner: str, repo: str, path: str, content: str, 
                     message: str, branch: str = None) -> Dict:
@@ -155,9 +150,7 @@ class GitHubClient:
         }
         if branch:
             data["branch"] = branch
-        resp = requests.put(url, headers=self.headers, json=data)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("PUT", url, json=data).json()
     
     def delete_file(self, owner: str, repo: str, path: str, sha: str, 
                     message: str, branch: str = None) -> Dict:
@@ -166,30 +159,26 @@ class GitHubClient:
         data = {"message": message, "sha": sha}
         if branch:
             data["branch"] = branch
-        resp = requests.delete(url, headers=self.headers, json=data)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("DELETE", url, json=data).json()
     
     def get_branches(self, owner: str, repo: str) -> List[Dict]:
         """Get repository branches"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/branches"
-        resp = requests.get(url, headers=self.headers)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", url).json()
     
-    def get_commits(self, owner: str, repo: str, per_page: int = 10) -> List[Dict]:
+    def get_commits(self, owner: str, repo: str, per_page: int = 10, sha: str = None) -> List[Dict]:
         """Get repository commits"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/commits"
-        resp = requests.get(url, headers=self.headers, params={"per_page": per_page})
-        resp.raise_for_status()
-        return resp.json()
+        params = {"per_page": per_page}
+        if sha:
+            params["sha"] = sha
+        return self._request("GET", url, params=params).json()
     
     def get_file_history(self, owner: str, repo: str, path: str) -> List[Dict]:
         """Get commit history for a specific file"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/commits"
-        resp = requests.get(url, headers=self.headers, params={"path": path})
-        resp.raise_for_status()
-        return resp.json()
+        params = {"path": path}
+        return self._request("GET", url, params=params).json()
 
 
 class HermesCoderAssistant:
@@ -333,7 +322,7 @@ class HermesCoderAssistant:
             return "No repository selected"
         try:
             owner, repo = self.current_repo.split("/")
-            commits = self.github.get_commits(owner, repo, per_page=limit)
+            commits = self.github.get_commits(owner, repo, per_page=limit, sha=self.current_branch)
             lines = [f"📜 Recent commits in {self.current_repo}:\n"]
             for commit in commits:
                 msg = commit.get("commit", {}).get("message", "").split("\n")[0]
@@ -561,7 +550,7 @@ When answering questions:
         
         # Add context about the current repository
         if self.current_repo:
-            prompt += f"<|im_start|>user\nContext: Working on repository {self.current_repo}\n"
+            prompt += f"<|im_start|>user\nContext: Working on repository {self.current_repo} (branch: {self.current_branch})\n"
             if self.current_path:
                 prompt += f"Current path: {self.current_path}\n"
             if self.file_contents:
@@ -623,7 +612,7 @@ How can I help you?"""
             if self.current_repo and self.github:
                 try:
                     owner, repo = self.current_repo.split("/")
-                    contents = self.github.get_repo_contents(owner, repo)
+                    contents = self.github.get_repo_contents(owner, repo, ref=self.current_branch)
                     files = [c["name"] for c in contents]
                     return f"📂 **Project Structure:**\n\n" + "\n".join([f"- {f}" for f in files])
                 except:
