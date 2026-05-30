@@ -109,17 +109,19 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()
     
-    def get_repo_contents(self, owner: str, repo: str, path: str = "") -> List[Dict]:
+    def get_repo_contents(self, owner: str, repo: str, path: str = "", ref: str = None) -> List[Dict]:
         """Get contents of a repository path"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
-        resp = requests.get(url, headers=self.headers)
+        params = {"ref": ref} if ref else {}
+        resp = requests.get(url, headers=self.headers, params=params)
         resp.raise_for_status()
         return resp.json()
     
-    def get_file_content(self, owner: str, repo: str, path: str) -> Tuple[str, str]:
+    def get_file_content(self, owner: str, repo: str, path: str, ref: str = None) -> Tuple[str, str]:
         """Get file content and sha"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
-        resp = requests.get(url, headers=self.headers)
+        params = {"ref": ref} if ref else {}
+        resp = requests.get(url, headers=self.headers, params=params)
         resp.raise_for_status()
         data = resp.json()
         import base64
@@ -127,7 +129,7 @@ class GitHubClient:
         return content, data["sha"]
     
     def update_file(self, owner: str, repo: str, path: str, content: str, 
-                    message: str, sha: str) -> Dict:
+                    message: str, sha: str, branch: str = None) -> Dict:
         """Update a file in the repository"""
         import base64
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
@@ -136,12 +138,14 @@ class GitHubClient:
             "content": base64.b64encode(content.encode()).decode(),
             "sha": sha
         }
+        if branch:
+            data["branch"] = branch
         resp = requests.put(url, headers=self.headers, json=data)
         resp.raise_for_status()
         return resp.json()
     
     def create_file(self, owner: str, repo: str, path: str, content: str, 
-                    message: str) -> Dict:
+                    message: str, branch: str = None) -> Dict:
         """Create a new file in the repository"""
         import base64
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
@@ -149,15 +153,19 @@ class GitHubClient:
             "message": message,
             "content": base64.b64encode(content.encode()).decode()
         }
+        if branch:
+            data["branch"] = branch
         resp = requests.put(url, headers=self.headers, json=data)
         resp.raise_for_status()
         return resp.json()
     
     def delete_file(self, owner: str, repo: str, path: str, sha: str, 
-                    message: str) -> Dict:
+                    message: str, branch: str = None) -> Dict:
         """Delete a file from the repository"""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
         data = {"message": message, "sha": sha}
+        if branch:
+            data["branch"] = branch
         resp = requests.delete(url, headers=self.headers, json=data)
         resp.raise_for_status()
         return resp.json()
@@ -243,7 +251,7 @@ class HermesCoderAssistant:
             self.current_repo_info = self.github.get_repo(owner, repo)
             self.current_branch = self.current_repo_info.get("default_branch", "main")
             
-            contents = self.github.get_repo_contents(owner, repo)
+            contents = self.github.get_repo_contents(owner, repo, ref=self.current_branch)
             return self._format_directory_list(contents, "")
         except Exception as e:
             return f"Error: {str(e)}"
@@ -282,7 +290,7 @@ class HermesCoderAssistant:
             self.current_path = ""
             self.file_contents = {}
             owner, repo = self.current_repo.split("/")
-            contents = self.github.get_repo_contents(owner, repo, headers={"ref": branch})
+            contents = self.github.get_repo_contents(owner, repo, ref=branch)
             return self._format_directory_list(contents, "")
         except Exception as e:
             return f"Error switching branch: {str(e)}"
@@ -375,7 +383,7 @@ class HermesCoderAssistant:
         try:
             self.current_path = path
             owner, repo = self.current_repo.split("/")
-            contents = self.github.get_repo_contents(owner, repo, path)
+            contents = self.github.get_repo_contents(owner, repo, path, ref=self.current_branch)
             return self._format_directory_list(contents, path)
         except Exception as e:
             return f"Error: {str(e)}"
@@ -393,7 +401,7 @@ class HermesCoderAssistant:
         
         try:
             owner, repo = self.current_repo.split("/")
-            content, sha = self.github.get_file_content(owner, repo, full_path)
+            content, sha = self.github.get_file_content(owner, repo, full_path, ref=self.current_branch)
             self.file_contents[full_path] = {"content": content, "sha": sha}
             
             # Add to conversation context
@@ -417,10 +425,12 @@ class HermesCoderAssistant:
             if full_path in self.file_contents:
                 sha = self.file_contents[full_path]["sha"]
                 self.github.update_file(owner, repo, full_path, content, 
-                                       f"Update {filename} via Hermes Coder", sha)
+                                       f"Update {filename} via Hermes Coder", sha,
+                                       branch=self.current_branch)
             else:
                 self.github.create_file(owner, repo, full_path, content,
-                                       f"Create {filename} via Hermes Coder")
+                                       f"Create {filename} via Hermes Coder",
+                                       branch=self.current_branch)
             
             self._add_to_context("file_saved", full_path, content[:500])
             return f"✅ Saved: {full_path}"
@@ -436,9 +446,10 @@ class HermesCoderAssistant:
         
         try:
             owner, repo = self.current_repo.split("/")
-            content, sha = self.github.get_file_content(owner, repo, full_path)
+            content, sha = self.github.get_file_content(owner, repo, full_path, ref=self.current_branch)
             self.github.delete_file(owner, repo, full_path, sha, 
-                                   f"Delete {filename} via Hermes Coder")
+                                   f"Delete {filename} via Hermes Coder",
+                                   branch=self.current_branch)
             return f"✅ Deleted: {full_path}"
         except Exception as e:
             return f"❌ Error deleting: {str(e)}"
